@@ -11,7 +11,7 @@
 - **複数の出力デバイス対応**
   - シリアルデバイス: 実際のLEDマトリックス（シリアル接続）
   - ターミナル出力: ハードウェアなしでテスト可能
-  - 画像出力: PNG画像とMP4動画として保存
+  - 画像出力: staticモードではPNG画像、scrollモードではMP4動画として保存
 
 - **表示モード**
   - 静的表示: テキストを固定表示
@@ -51,7 +51,10 @@ uv run python -m led_matrix_software.main --text "こんにちは"
 # スクロール表示
 uv run python -m led_matrix_software.main --mode scroll --text "LEDマトリックスディスプレイ"
 
-# 画像として保存
+# 静的表示を画像として保存（PNG形式）
+uv run python -m led_matrix_software.main --device image --text "Hello LED"
+
+# スクロール表示を動画として保存（MP4形式）
 uv run python -m led_matrix_software.main --device image --mode scroll --text "テスト"
 ```
 

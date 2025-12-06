@@ -65,13 +65,19 @@ class TerminalSimulator(LEDDevice):
 class ImageSimulator(LEDDevice):
     """Simulated LED matrix device with image file output"""
 
-    def __init__(self, output_dir: str = "output", pixel_size: int = 10):
+    def __init__(
+        self,
+        output_dir: str = "output",
+        pixel_size: int = 10,
+        save_individual_frames: bool = False
+    ):
         """
         Initialize image simulator.
 
         Args:
             output_dir: Directory to save output images (default: 'output')
             pixel_size: Size of each LED pixel (default: 10)
+            save_individual_frames: Save each frame as individual PNG (default: False)
         """
         self.width = 128  # 8 columns * 16 bits
         self.height = 16
@@ -80,6 +86,7 @@ class ImageSimulator(LEDDevice):
         self.output_dir.mkdir(exist_ok=True)
         self.frame_count = 0
         self.frames = []
+        self.save_individual_frames = save_individual_frames
 
     def write(self, matrix_buffer: np.ndarray) -> None:
         """
@@ -108,29 +115,31 @@ class ImageSimulator(LEDDevice):
             interpolation=cv2.INTER_NEAREST
         )
 
-        # Save frame
-        output_file = self.output_dir / f"frame_{self.frame_count:04d}.png"
-        cv2.imwrite(str(output_file), img)
+        # Save individual frame if requested
+        if self.save_individual_frames:
+            output_file = self.output_dir / f"frame_{self.frame_count:04d}.png"
+            cv2.imwrite(str(output_file), img)
+
+        # Always keep in memory for potential video/static output
         self.frames.append(img)
         self.frame_count += 1
 
-    def save_gif(self, filename: str = "animation.gif", fps: int = 30) -> None:
+    def save_video(self, filename: str = "animation.mp4", fps: int = 30) -> None:
         """
-        Save all frames as animated GIF.
+        Save all frames as MP4 video.
 
         Args:
-            filename: Output GIF filename
+            filename: Output MP4 filename
             fps: Frames per second
         """
         if not self.frames:
             return
 
         output_path = self.output_dir / filename
-        # OpenCV doesn't support GIF directly, so save as video instead
         fourcc = cv2.VideoWriter_fourcc(*'mp4v')
         height, width = self.frames[0].shape[:2]
         out = cv2.VideoWriter(
-            str(output_path.with_suffix('.mp4')),
+            str(output_path),
             fourcc,
             fps,
             (width, height)
@@ -140,12 +149,33 @@ class ImageSimulator(LEDDevice):
             out.write(frame)
 
         out.release()
-        print(f"Animation saved to {output_path.with_suffix('.mp4')}")
+        print(f"Animation saved to {output_path}")
+
+    def save_static_image(self, filename: str = "display.png") -> None:
+        """
+        Save the last frame as a static PNG image.
+
+        Args:
+            filename: Output PNG filename
+        """
+        if not self.frames:
+            return
+
+        output_path = self.output_dir / filename
+        cv2.imwrite(str(output_path), self.frames[-1])
+        print(f"Static image saved to {output_path}")
 
     def close(self) -> None:
-        """Save animation on close"""
-        if self.frames:
-            self.save_gif()
+        """Save output based on number of frames"""
+        if not self.frames:
+            return
+
+        # If only one frame, save as static image
+        if len(self.frames) == 1:
+            self.save_static_image()
+        # If multiple frames, save as video
+        else:
+            self.save_video()
 
 
 # Alias for backward compatibility
