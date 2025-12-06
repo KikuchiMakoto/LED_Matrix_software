@@ -90,14 +90,20 @@ class ImageSimulator(LEDDevice):
 
     def write(self, matrix_buffer: np.ndarray) -> None:
         """
-        Save matrix buffer as image file.
+        Save matrix buffer as image file with LED-like rendering.
 
         Args:
             matrix_buffer: uint16 array [8][16]
         """
-        # Create image
-        img = np.zeros((self.height, self.width, 3), dtype=np.uint8)
+        # Add vertical border (top and bottom)
+        border_size = 20
+        canvas_height = self.height * self.pixel_size + border_size * 2
+        canvas_width = self.width * self.pixel_size
 
+        # Create black background
+        img = np.zeros((canvas_height, canvas_width, 3), dtype=np.uint8)
+
+        # Draw each LED as a glowing circle
         for y in range(self.height):
             for x in range(self.width):
                 col_idx = x // 16
@@ -106,14 +112,12 @@ class ImageSimulator(LEDDevice):
                 is_on = (value >> (15 - bit_idx)) & 1
 
                 if is_on:
-                    img[y, x] = [0, 0, 255]  # Red LED
+                    # Calculate center position (with border offset)
+                    center_x = x * self.pixel_size + self.pixel_size // 2
+                    center_y = y * self.pixel_size + self.pixel_size // 2 + border_size
 
-        # Scale up
-        img = cv2.resize(
-            img,
-            (self.width * self.pixel_size, self.height * self.pixel_size),
-            interpolation=cv2.INTER_NEAREST
-        )
+                    # Draw LED with glow effect
+                    self._draw_glowing_led(img, center_x, center_y)
 
         # Save individual frame if requested
         if self.save_individual_frames:
@@ -123,6 +127,31 @@ class ImageSimulator(LEDDevice):
         # Always keep in memory for potential video/static output
         self.frames.append(img)
         self.frame_count += 1
+
+    def _draw_glowing_led(self, img: np.ndarray, cx: int, cy: int) -> None:
+        """
+        Draw a glowing LED effect at the specified position.
+
+        Args:
+            img: Image to draw on
+            cx: Center X coordinate
+            cy: Center Y coordinate
+        """
+        # LED appearance: red glowing circle
+        # Outer glow (largest, dimmest)
+        cv2.circle(img, (cx, cy), 5, (0, 0, 80), -1, cv2.LINE_AA)
+
+        # Middle glow
+        cv2.circle(img, (cx, cy), 4, (0, 0, 150), -1, cv2.LINE_AA)
+
+        # Inner bright core
+        cv2.circle(img, (cx, cy), 3, (0, 0, 220), -1, cv2.LINE_AA)
+
+        # Brightest center
+        cv2.circle(img, (cx, cy), 2, (0, 0, 255), -1, cv2.LINE_AA)
+
+        # Hot spot (very bright center)
+        cv2.circle(img, (cx, cy), 1, (40, 40, 255), -1, cv2.LINE_AA)
 
     def save_video(self, filename: str = "animation.mp4", fps: int = 30) -> None:
         """
