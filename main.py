@@ -1,26 +1,32 @@
 """LED Matrix Display - Main Entry Point
 
 This script demonstrates how to use the LED Matrix software with the refactored
-module structure. It supports both static display and infinite scrolling.
+module structure. It supports static display, single scroll, and infinite loop scrolling.
 
 Usage:
     # Static display
     python main.py --text "Hello"
 
-    # Scroll mode (infinite loop until Ctrl+C)
+    # Scroll mode (single scroll)
     python main.py --mode scroll --text "スクロール"
+
+    # Loop mode (infinite loop until Ctrl+C)
+    python main.py --mode loop --text "ループ"
 
     # Using different devices
     python main.py --device serial --port COM23 --text "Test"
     python main.py --device terminal --text "Test"
     python main.py --device image --output-dir output --text "Test"
+
+    # Note: For image device, loop mode will behave as scroll mode (single scroll)
+    python main.py --device image --mode loop --text "Test"
 """
 import argparse
 import sys
 
 from src.led_matrix_software.fonts import ShinonomeFont, CharaZenkakuFont
 from src.led_matrix_software.devices import SerialLEDDevice, TerminalSimulator, ImageSimulator
-from src.led_matrix_software.main import show_text, scroll_text
+from src.led_matrix_software.main import show_text, scroll_text, loop_text
 
 
 def main():
@@ -32,8 +38,10 @@ def main():
 Examples:
   %(prog)s --text "Hello, World!"
   %(prog)s --mode scroll --text "スクロールテスト"
+  %(prog)s --mode loop --text "ループテスト"
   %(prog)s --device serial --port COM23 --text "Test"
   %(prog)s --device image --output-dir output --mode scroll --text "動画"
+  %(prog)s --device image --output-dir output --mode loop --text "ループ動画"
         """
     )
 
@@ -71,9 +79,9 @@ Examples:
     # Display options
     parser.add_argument(
         '--mode',
-        choices=['static', 'scroll'],
+        choices=['static', 'scroll', 'loop'],
         default='static',
-        help='Display mode (default: static)'
+        help='Display mode: static (no scroll), scroll (scroll once), loop (infinite scroll, default: static)'
     )
     parser.add_argument(
         '--text',
@@ -133,8 +141,15 @@ Examples:
                         time.sleep(1)
                 except KeyboardInterrupt:
                     pass
-        else:  # scroll
+        elif args.mode == 'scroll':
             scroll_text(device, font, args.text, scroll_speed=args.scroll_speed)
+        else:  # loop
+            # For image device, loop mode behaves as scroll mode (single scroll)
+            if args.device == 'image':
+                print("Image device detected: loop mode will behave as scroll mode (single scroll)")
+                scroll_text(device, font, args.text, scroll_speed=args.scroll_speed)
+            else:
+                loop_text(device, font, args.text, scroll_speed=args.scroll_speed)
 
     finally:
         device.close()

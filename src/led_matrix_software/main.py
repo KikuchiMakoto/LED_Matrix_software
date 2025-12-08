@@ -27,6 +27,37 @@ def show_text(device, font, text: str):
 
 def scroll_text(device, font, text: str, scroll_speed: float = 0.02):
     """
+    Scroll text across LED matrix once.
+
+    Args:
+        device: LED device instance
+        font: Font renderer instance
+        text: Text to scroll
+        scroll_speed: Delay between frames in seconds (default: 0.02)
+
+    The scroll will run once through the text and stop.
+    """
+    # Add padding spaces
+    padding = "　　　　　　　　　　　"
+    padded_text = padding + text + padding
+
+    print("Starting single scroll...")
+    # Render text once
+    img = font.render_string(padded_text)
+
+    # Scroll by removing one column at a time
+    loop_length = img.shape[1]
+    for i in range(loop_length):
+        matrix = make_matrix_buffer(img)
+        device.write(matrix)
+        img = np.delete(img, 0, axis=1)
+        time.sleep(scroll_speed)
+
+    print("Scroll completed.")
+
+
+def loop_text(device, font, text: str, scroll_speed: float = 0.02):
+    """
     Scroll text across LED matrix infinitely.
 
     Args:
@@ -42,7 +73,7 @@ def scroll_text(device, font, text: str, scroll_speed: float = 0.02):
     padded_text = padding + text + padding
 
     try:
-        print("Starting infinite scroll... Press Ctrl+C to stop.")
+        print("Starting infinite loop scroll... Press Ctrl+C to stop.")
         while True:
             # Render text for each loop iteration
             img = font.render_string(padded_text)
@@ -55,7 +86,7 @@ def scroll_text(device, font, text: str, scroll_speed: float = 0.02):
                 img = np.delete(img, 0, axis=1)
                 time.sleep(scroll_speed)
     except KeyboardInterrupt:
-        print("\nScroll stopped by user.")
+        print("\nLoop scroll stopped by user.")
 
 
 def main():
@@ -96,9 +127,9 @@ def main():
     # Display options
     parser.add_argument(
         '--mode',
-        choices=['static', 'scroll'],
+        choices=['static', 'scroll', 'loop'],
         default='static',
-        help='Display mode (default: static)'
+        help='Display mode: static (no scroll), scroll (scroll once), loop (infinite scroll, default: static)'
     )
     parser.add_argument(
         '--text',
@@ -157,8 +188,15 @@ def main():
                         time.sleep(1)
                 except KeyboardInterrupt:
                     pass
-        else:  # scroll
+        elif args.mode == 'scroll':
             scroll_text(device, font, args.text, scroll_speed=args.scroll_speed)
+        else:  # loop
+            # For image device, loop mode behaves as scroll mode (single scroll)
+            if args.device == 'image':
+                print("Image device detected: loop mode will behave as scroll mode (single scroll)")
+                scroll_text(device, font, args.text, scroll_speed=args.scroll_speed)
+            else:
+                loop_text(device, font, args.text, scroll_speed=args.scroll_speed)
 
     finally:
         device.close()
