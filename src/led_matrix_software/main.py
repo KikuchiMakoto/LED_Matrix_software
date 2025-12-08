@@ -38,7 +38,7 @@ def scroll_text(device, font, text: str, scroll_speed: float = 0.02):
     The scroll will run once through the text and stop.
     """
     # Add padding spaces
-    padding = "　　　　　　　　　　　"
+    padding = "                "
     padded_text = padding + text + padding
 
     print("Starting single scroll...")
@@ -69,7 +69,7 @@ def loop_text(device, font, text: str, scroll_speed: float = 0.02):
     The scroll will loop infinitely until interrupted with Ctrl+C.
     """
     # Add padding spaces
-    padding = "　　　　　　　　　　　"
+    padding = "                "
     padded_text = padding + text + padding
 
     try:
