@@ -1,66 +1,41 @@
-"""LED Matrix Display Main Program"""
+"""LED Matrix Display - Main Entry Point
+
+This script demonstrates how to use the LED Matrix software with the refactored
+module structure. It supports both static display and infinite scrolling.
+
+Usage:
+    # Static display
+    python main.py --text "Hello"
+
+    # Scroll mode (infinite loop until Ctrl+C)
+    python main.py --mode scroll --text "スクロール"
+
+    # Using different devices
+    python main.py --device serial --port COM23 --text "Test"
+    python main.py --device terminal --text "Test"
+    python main.py --device image --output-dir output --text "Test"
+"""
 import argparse
-import time
 import sys
-from pathlib import Path
 
-import numpy as np
-
-from .fonts import ShinonomeFont, CharaZenkakuFont
-from .devices import SerialLEDDevice, TerminalSimulator, ImageSimulator
-from .matrix import make_matrix_buffer
-
-
-def show_text(device, font, text: str):
-    """
-    Display static text on LED matrix.
-
-    Args:
-        device: LED device instance
-        font: Font renderer instance
-        text: Text to display
-    """
-    img = font.render_string(text)
-    matrix = make_matrix_buffer(img)
-    device.write(matrix)
-
-
-def scroll_text(device, font, text: str, scroll_speed: float = 0.02):
-    """
-    Scroll text across LED matrix infinitely.
-
-    Args:
-        device: LED device instance
-        font: Font renderer instance
-        text: Text to scroll
-        scroll_speed: Delay between frames in seconds (default: 0.02)
-
-    The scroll will loop infinitely until interrupted with Ctrl+C.
-    """
-    # Add padding spaces
-    padding = "　　　　　　　　　　　"
-    padded_text = padding + text + padding
-
-    try:
-        print("Starting infinite scroll... Press Ctrl+C to stop.")
-        while True:
-            # Render text for each loop iteration
-            img = font.render_string(padded_text)
-
-            # Scroll by removing one column at a time
-            loop_length = img.shape[1]
-            for i in range(loop_length):
-                matrix = make_matrix_buffer(img)
-                device.write(matrix)
-                img = np.delete(img, 0, axis=1)
-                time.sleep(scroll_speed)
-    except KeyboardInterrupt:
-        print("\nScroll stopped by user.")
+from src.led_matrix_software.fonts import ShinonomeFont, CharaZenkakuFont
+from src.led_matrix_software.devices import SerialLEDDevice, TerminalSimulator, ImageSimulator
+from src.led_matrix_software.main import show_text, scroll_text
 
 
 def main():
     """Main entry point"""
-    parser = argparse.ArgumentParser(description='LED Matrix Display Control')
+    parser = argparse.ArgumentParser(
+        description='LED Matrix Display Control',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  %(prog)s --text "Hello, World!"
+  %(prog)s --mode scroll --text "スクロールテスト"
+  %(prog)s --device serial --port COM23 --text "Test"
+  %(prog)s --device image --output-dir output --mode scroll --text "動画"
+        """
+    )
 
     # Device options
     parser.add_argument(
@@ -153,6 +128,7 @@ def main():
             if args.device == 'terminal':
                 print("\nPress Ctrl+C to exit...")
                 try:
+                    import time
                     while True:
                         time.sleep(1)
                 except KeyboardInterrupt:
