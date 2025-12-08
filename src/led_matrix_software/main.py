@@ -27,26 +27,35 @@ def show_text(device, font, text: str):
 
 def scroll_text(device, font, text: str, scroll_speed: float = 0.02):
     """
-    Scroll text across LED matrix.
+    Scroll text across LED matrix infinitely.
 
     Args:
         device: LED device instance
         font: Font renderer instance
         text: Text to scroll
         scroll_speed: Delay between frames in seconds (default: 0.02)
+
+    The scroll will loop infinitely until interrupted with Ctrl+C.
     """
     # Add padding spaces
     padding = "　　　　　　　　　　　"
     padded_text = padding + text + padding
-    img = font.render_string(padded_text)
 
-    # Scroll by removing one column at a time
-    loop_length = img.shape[1]
-    for i in range(loop_length):
-        matrix = make_matrix_buffer(img)
-        device.write(matrix)
-        img = np.delete(img, 0, axis=1)
-        time.sleep(scroll_speed)
+    try:
+        print("Starting infinite scroll... Press Ctrl+C to stop.")
+        while True:
+            # Render text for each loop iteration
+            img = font.render_string(padded_text)
+
+            # Scroll by removing one column at a time
+            loop_length = img.shape[1]
+            for i in range(loop_length):
+                matrix = make_matrix_buffer(img)
+                device.write(matrix)
+                img = np.delete(img, 0, axis=1)
+                time.sleep(scroll_speed)
+    except KeyboardInterrupt:
+        print("\nScroll stopped by user.")
 
 
 def main():
