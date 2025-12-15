@@ -5,6 +5,7 @@ description = "LED Matrix Display Software with Shinonome Font"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "numba>=0.63.1",
     "numpy>=1.24.0",
     "opencv-python>=4.8.0",
     "pyserial>=3.5",
