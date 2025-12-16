@@ -99,6 +99,12 @@ class CharaZenkakuFont(FontRenderer):
         if char in self._char_cache:
             return self._char_cache[char]
 
+        # Handle space character: return blank image with same width as font
+        if char == ' ':
+            space_img = np.zeros((self.char_height, self.char_width, 3), dtype=np.uint8)
+            self._char_cache[char] = space_img
+            return space_img
+
         pos = self._find_char_position(char)
         if pos is None:
             return None
