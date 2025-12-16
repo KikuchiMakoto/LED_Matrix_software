@@ -1,4 +1,4 @@
-"""Shinonome 16-pixel font renderer"""
+"""Shinonome 16-pixel font renderer with Taichi GPU optimization"""
 import csv
 import unicodedata
 from pathlib import Path
@@ -7,7 +7,40 @@ from typing import Dict, List, Optional
 import cv2
 import numpy as np
 
+try:
+    import taichi as ti
+    ti.init(arch=ti.cpu)  # Use CPU backend (ti.gpu for CUDA/Vulkan)
+    TAICHI_AVAILABLE = True
+except ImportError:
+    TAICHI_AVAILABLE = False
+
 from .base import FontRenderer
+
+
+if TAICHI_AVAILABLE:
+    @ti.kernel
+    def _generate_bitmap_taichi(
+        line_chars: ti.types.ndarray(),
+        result: ti.types.ndarray(),
+        width: ti.i32,
+        height: ti.i32,
+        max_width: ti.i32
+    ):
+        """
+        Taichi kernel for fast bitmap generation with parallel processing.
+
+        Args:
+            line_chars: 2D array of character ASCII codes
+            result: Output RGB bitmap array
+            width: Character width
+            height: Character height
+            max_width: Maximum line width
+        """
+        for j, bit in ti.ndrange(height, width):
+            if bit < max_width and line_chars[j, bit] != 46:  # '.' = ASCII 46
+                result[j, bit, 0] = ti.u8(255)
+                result[j, bit, 1] = ti.u8(255)
+                result[j, bit, 2] = ti.u8(255)
 
 
 class ShinonomeFont(FontRenderer):
@@ -30,7 +63,6 @@ class ShinonomeFont(FontRenderer):
         """
         self.font_dir = Path(font_dir)
         self.zenkaku_map = []
-        self._load_character_map()
 
         # Cache for performance optimization
         self._latin_lines: Optional[List[str]] = None
@@ -38,6 +70,17 @@ class ShinonomeFont(FontRenderer):
         self._zenkaku_lines: Optional[List[str]] = None
         self._padding_image: Optional[np.ndarray] = None
         self._char_cache: Dict[str, np.ndarray] = {}
+
+        # BDF index cache (maps character code to line number for fast lookup)
+        self._latin_index: Optional[Dict[str, int]] = None
+        self._hankaku_index: Optional[Dict[str, int]] = None
+        self._zenkaku_index: Optional[Dict[str, int]] = None
+
+        # UTF8 to JISX code map for fast zenkaku character lookup
+        self._utf8_to_jisx: Optional[Dict[int, int]] = None
+
+        # Load character mapping after initializing all attributes
+        self._load_character_map()
 
     def _load_character_map(self):
         """Load character code mapping from TSV file"""
@@ -57,30 +100,93 @@ class ShinonomeFont(FontRenderer):
                 except (IndexError, ValueError):
                     pass
 
+        # Build UTF8 to JISX map for faster lookup
+        if self._utf8_to_jisx is None:
+            self._utf8_to_jisx = {c.utf8: c.jisx for c in self.zenkaku_map}
+
+    def _build_bdf_index(self, lines: List[str]) -> Dict[str, int]:
+        """
+        Build index mapping character codes to line numbers in BDF file.
+
+        Args:
+            lines: BDF file lines
+
+        Returns:
+            Dictionary mapping character code (e.g., "3042") to line number
+        """
+        index = {}
+        for i, line in enumerate(lines):
+            if line.startswith('STARTCHAR'):
+                parts = line.split()
+                if len(parts) >= 2:
+                    char_code = parts[1].strip()
+                    index[char_code] = i
+        return index
+
     def _load_latin_bdf(self) -> List[str]:
         """Load latin.bdf file (cached)"""
-        if self._latin_lines is not None:
+        # Check if already loaded successfully (non-empty)
+        if self._latin_lines is not None and len(self._latin_lines) > 0:
             return self._latin_lines
 
         bdf_path = self.font_dir / "latin.bdf"
         try:
             with open(bdf_path, mode="r", encoding="utf-8") as f:
                 self._latin_lines = f.readlines()
+
+            # Build index for fast lookup (skip expensive data preprocessing)
+            if len(self._latin_lines) > 0:
+                self._latin_index = self._build_bdf_index(self._latin_lines)
         except Exception:
             self._latin_lines = []
         return self._latin_lines
 
     def _get_latin_image(self, char: str) -> Optional[np.ndarray]:
-        """Get image for ASCII character"""
+        """Get image for ASCII character (optimized with BDF index)"""
         try:
             ascii_code = int(char.encode('ascii')[0])
         except (UnicodeEncodeError, UnicodeDecodeError):
             return None
 
-        target_string = "STARTCHAR " + format(ascii_code, '2x')
+        char_code = format(ascii_code, '2x')
+        lines = self._load_latin_bdf()
+
+        # Use index for fast lookup if available
+        if self._latin_index:
+            line_num = self._latin_index.get(char_code)
+            if line_num is not None and line_num + 1 < len(lines):
+                next_string = "ENCODING " + format(ascii_code, 'd')
+                if lines[line_num + 1].startswith(next_string):
+                    # Use Taichi for parallel bitmap generation
+                    if TAICHI_AVAILABLE:
+                        # Prepare character data (16 lines)
+                        max_len = max(len(lines[line_num + 6 + j]) for j in range(16) if line_num + 6 + j < len(lines))
+                        line_chars = np.zeros((16, max_len), dtype=np.uint8)
+                        for j in range(16):
+                            if line_num + 6 + j < len(lines):
+                                line = lines[line_num + 6 + j]
+                                for k, c in enumerate(line[:max_len]):
+                                    line_chars[j, k] = ord(c)
+
+                        # Generate bitmap using Taichi kernel
+                        result = np.zeros((16, 8, 3), dtype=np.uint8)
+                        _generate_bitmap_taichi(line_chars, result, 8, 16, max_len)
+                        return result
+                    else:
+                        # Fallback: Original Python loops
+                        ret = np.zeros((16, 8, 3), np.uint8)
+                        for j in range(16):
+                            if line_num + 6 + j < len(lines):
+                                line = lines[line_num + 6 + j]
+                                for bit in range(8):
+                                    if bit < len(line):
+                                        ret[j][bit] = [0, 0, 0] if line[bit] == "." else [255, 255, 255]
+                        return ret
+
+        # Fallback: Linear search if index not available
+        target_string = "STARTCHAR " + char_code
         next_string = "ENCODING " + format(ascii_code, 'd')
 
-        lines = self._load_latin_bdf()
         for i, line in enumerate(lines):
             if line.startswith(target_string) and i + 1 < len(lines) and lines[i + 1].startswith(next_string):
                 ret = np.zeros((16, 8, 3), np.uint8)
@@ -95,27 +201,68 @@ class ShinonomeFont(FontRenderer):
 
     def _load_hankaku_bdf(self) -> List[str]:
         """Load hankaku.bdf file (cached)"""
-        if self._hankaku_lines is not None:
+        # Check if already loaded successfully (non-empty)
+        if self._hankaku_lines is not None and len(self._hankaku_lines) > 0:
             return self._hankaku_lines
 
         bdf_path = self.font_dir / "hankaku.bdf"
         try:
             with open(bdf_path, mode="r", encoding="utf-8") as f:
                 self._hankaku_lines = f.readlines()
+
+            # Build index for fast lookup (skip expensive data preprocessing)
+            if len(self._hankaku_lines) > 0:
+                self._hankaku_index = self._build_bdf_index(self._hankaku_lines)
         except Exception:
             self._hankaku_lines = []
         return self._hankaku_lines
 
     def _get_hankaku_image(self, char: str) -> Optional[np.ndarray]:
-        """Get image for half-width character"""
+        """Get image for half-width character (optimized with BDF index)"""
         try:
             sjis = int(char.encode('shift_jis')[0])
         except (UnicodeEncodeError, UnicodeDecodeError):
             return None
 
-        target_string = "STARTCHAR   " + format(sjis, '2x')
-
+        char_code = format(sjis, '2x')
         lines = self._load_hankaku_bdf()
+
+        # Use index for fast lookup if available
+        if self._hankaku_index:
+            # Try with extra spaces (BDF format uses "STARTCHAR   XX")
+            for prefix in ["  ", " ", ""]:
+                lookup_code = prefix + char_code
+                line_num = self._hankaku_index.get(lookup_code)
+                if line_num is not None and line_num + 6 + 16 <= len(lines):
+                    # Use Taichi for parallel bitmap generation
+                    if TAICHI_AVAILABLE:
+                        # Prepare character data (16 lines)
+                        max_len = max(len(lines[line_num + 6 + j]) for j in range(16) if line_num + 6 + j < len(lines))
+                        line_chars = np.zeros((16, max_len), dtype=np.uint8)
+                        for j in range(16):
+                            if line_num + 6 + j < len(lines):
+                                line = lines[line_num + 6 + j]
+                                for k, c in enumerate(line[:max_len]):
+                                    line_chars[j, k] = ord(c)
+
+                        # Generate bitmap using Taichi kernel
+                        result = np.zeros((16, 8, 3), dtype=np.uint8)
+                        _generate_bitmap_taichi(line_chars, result, 8, 16, max_len)
+                        return result
+                    else:
+                        # Fallback: Original Python loops
+                        ret = np.zeros((16, 8, 3), np.uint8)
+                        for j in range(16):
+                            if line_num + 6 + j < len(lines):
+                                line = lines[line_num + 6 + j]
+                                for bit in range(8):
+                                    if bit < len(line):
+                                        ret[j][bit] = [0, 0, 0] if line[bit] == "." else [255, 255, 255]
+                        return ret
+
+        # Fallback: Linear search if index not available
+        target_string = "STARTCHAR   " + char_code
+
         for i, line in enumerate(lines):
             if line.startswith(target_string):
                 ret = np.zeros((16, 8, 3), np.uint8)
@@ -130,31 +277,73 @@ class ShinonomeFont(FontRenderer):
 
     def _load_zenkaku_bdf(self) -> List[str]:
         """Load zenkaku.bdf file (cached)"""
-        if self._zenkaku_lines is not None:
+        # Check if already loaded successfully (non-empty)
+        if self._zenkaku_lines is not None and len(self._zenkaku_lines) > 0:
             return self._zenkaku_lines
 
         bdf_path = self.font_dir / "zenkaku.bdf"
         try:
             with open(bdf_path, mode="r", encoding="utf-8") as f:
                 self._zenkaku_lines = f.readlines()
+
+            # Build index for fast lookup (skip expensive data preprocessing)
+            if len(self._zenkaku_lines) > 0:
+                self._zenkaku_index = self._build_bdf_index(self._zenkaku_lines)
         except Exception:
             self._zenkaku_lines = []
         return self._zenkaku_lines
 
     def _get_zenkaku_image(self, char: str) -> Optional[np.ndarray]:
-        """Get image for full-width character"""
-        jisx = None
-        for c in self.zenkaku_map:
-            if c.utf8 == ord(char):
-                jisx = c.jisx
-                break
+        """Get image for full-width character (optimized with BDF index)"""
+        # Use fast UTF8 to JISX lookup
+        if self._utf8_to_jisx:
+            jisx = self._utf8_to_jisx.get(ord(char))
+        else:
+            jisx = None
+            for c in self.zenkaku_map:
+                if c.utf8 == ord(char):
+                    jisx = c.jisx
+                    break
 
         if jisx is None:
             return None
 
-        target_string = "STARTCHAR " + format(jisx, '4x')
-
+        char_code = format(jisx, '4x')
         lines = self._load_zenkaku_bdf()
+
+        # Use index for fast lookup if available
+        if self._zenkaku_index:
+            line_num = self._zenkaku_index.get(char_code)
+            if line_num is not None and line_num + 6 + 16 <= len(lines):
+                # Use Taichi for parallel bitmap generation
+                if TAICHI_AVAILABLE:
+                    # Prepare character data (16 lines)
+                    max_len = max(len(lines[line_num + 6 + j]) for j in range(16) if line_num + 6 + j < len(lines))
+                    line_chars = np.zeros((16, max_len), dtype=np.uint8)
+                    for j in range(16):
+                        if line_num + 6 + j < len(lines):
+                            line = lines[line_num + 6 + j]
+                            for k, c in enumerate(line[:max_len]):
+                                line_chars[j, k] = ord(c)
+
+                    # Generate bitmap using Taichi kernel
+                    result = np.zeros((16, 16, 3), dtype=np.uint8)
+                    _generate_bitmap_taichi(line_chars, result, 16, 16, max_len)
+                    return result
+                else:
+                    # Fallback: Original Python loops
+                    ret = np.zeros((16, 16, 3), np.uint8)
+                    for j in range(16):
+                        if line_num + 6 + j < len(lines):
+                            line = lines[line_num + 6 + j]
+                            for bit in range(16):
+                                if bit < len(line):
+                                    ret[j][bit] = [0, 0, 0] if line[bit] == "." else [255, 255, 255]
+                    return ret
+
+        # Fallback: Linear search if index not available
+        target_string = "STARTCHAR " + char_code
+
         for i, line in enumerate(lines):
             if line.startswith(target_string):
                 ret = np.zeros((16, 16, 3), np.uint8)
