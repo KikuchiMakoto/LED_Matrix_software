@@ -1,4 +1,4 @@
-"""Shinonome 16-pixel font renderer with BDF indexing optimization"""
+"""Shinonome 16-pixel font renderer with Taichi GPU optimization"""
 import csv
 import unicodedata
 from pathlib import Path
@@ -7,7 +7,40 @@ from typing import Dict, List, Optional
 import cv2
 import numpy as np
 
+try:
+    import taichi as ti
+    ti.init(arch=ti.cpu)  # Use CPU backend (ti.gpu for CUDA/Vulkan)
+    TAICHI_AVAILABLE = True
+except ImportError:
+    TAICHI_AVAILABLE = False
+
 from .base import FontRenderer
+
+
+if TAICHI_AVAILABLE:
+    @ti.kernel
+    def _generate_bitmap_taichi(
+        line_chars: ti.types.ndarray(),
+        result: ti.types.ndarray(),
+        width: ti.i32,
+        height: ti.i32,
+        max_width: ti.i32
+    ):
+        """
+        Taichi kernel for fast bitmap generation with parallel processing.
+
+        Args:
+            line_chars: 2D array of character ASCII codes
+            result: Output RGB bitmap array
+            width: Character width
+            height: Character height
+            max_width: Maximum line width
+        """
+        for j, bit in ti.ndrange(height, width):
+            if bit < max_width and line_chars[j, bit] != 46:  # '.' = ASCII 46
+                result[j, bit, 0] = ti.u8(255)
+                result[j, bit, 1] = ti.u8(255)
+                result[j, bit, 2] = ti.u8(255)
 
 
 class ShinonomeFont(FontRenderer):
@@ -124,15 +157,31 @@ class ShinonomeFont(FontRenderer):
             if line_num is not None and line_num + 1 < len(lines):
                 next_string = "ENCODING " + format(ascii_code, 'd')
                 if lines[line_num + 1].startswith(next_string):
-                    # Generate bitmap using index (skip linear search)
-                    ret = np.zeros((16, 8, 3), np.uint8)
-                    for j in range(16):
-                        if line_num + 6 + j < len(lines):
-                            line = lines[line_num + 6 + j]
-                            for bit in range(8):
-                                if bit < len(line):
-                                    ret[j][bit] = [0, 0, 0] if line[bit] == "." else [255, 255, 255]
-                    return ret
+                    # Use Taichi for parallel bitmap generation
+                    if TAICHI_AVAILABLE:
+                        # Prepare character data (16 lines)
+                        max_len = max(len(lines[line_num + 6 + j]) for j in range(16) if line_num + 6 + j < len(lines))
+                        line_chars = np.zeros((16, max_len), dtype=np.uint8)
+                        for j in range(16):
+                            if line_num + 6 + j < len(lines):
+                                line = lines[line_num + 6 + j]
+                                for k, c in enumerate(line[:max_len]):
+                                    line_chars[j, k] = ord(c)
+
+                        # Generate bitmap using Taichi kernel
+                        result = np.zeros((16, 8, 3), dtype=np.uint8)
+                        _generate_bitmap_taichi(line_chars, result, 8, 16, max_len)
+                        return result
+                    else:
+                        # Fallback: Original Python loops
+                        ret = np.zeros((16, 8, 3), np.uint8)
+                        for j in range(16):
+                            if line_num + 6 + j < len(lines):
+                                line = lines[line_num + 6 + j]
+                                for bit in range(8):
+                                    if bit < len(line):
+                                        ret[j][bit] = [0, 0, 0] if line[bit] == "." else [255, 255, 255]
+                        return ret
 
         # Fallback: Linear search if index not available
         target_string = "STARTCHAR " + char_code
@@ -185,15 +234,31 @@ class ShinonomeFont(FontRenderer):
                 lookup_code = prefix + char_code
                 line_num = self._hankaku_index.get(lookup_code)
                 if line_num is not None and line_num + 6 + 16 <= len(lines):
-                    # Generate bitmap using index (skip linear search)
-                    ret = np.zeros((16, 8, 3), np.uint8)
-                    for j in range(16):
-                        if line_num + 6 + j < len(lines):
-                            line = lines[line_num + 6 + j]
-                            for bit in range(8):
-                                if bit < len(line):
-                                    ret[j][bit] = [0, 0, 0] if line[bit] == "." else [255, 255, 255]
-                    return ret
+                    # Use Taichi for parallel bitmap generation
+                    if TAICHI_AVAILABLE:
+                        # Prepare character data (16 lines)
+                        max_len = max(len(lines[line_num + 6 + j]) for j in range(16) if line_num + 6 + j < len(lines))
+                        line_chars = np.zeros((16, max_len), dtype=np.uint8)
+                        for j in range(16):
+                            if line_num + 6 + j < len(lines):
+                                line = lines[line_num + 6 + j]
+                                for k, c in enumerate(line[:max_len]):
+                                    line_chars[j, k] = ord(c)
+
+                        # Generate bitmap using Taichi kernel
+                        result = np.zeros((16, 8, 3), dtype=np.uint8)
+                        _generate_bitmap_taichi(line_chars, result, 8, 16, max_len)
+                        return result
+                    else:
+                        # Fallback: Original Python loops
+                        ret = np.zeros((16, 8, 3), np.uint8)
+                        for j in range(16):
+                            if line_num + 6 + j < len(lines):
+                                line = lines[line_num + 6 + j]
+                                for bit in range(8):
+                                    if bit < len(line):
+                                        ret[j][bit] = [0, 0, 0] if line[bit] == "." else [255, 255, 255]
+                        return ret
 
         # Fallback: Linear search if index not available
         target_string = "STARTCHAR   " + char_code
@@ -250,15 +315,31 @@ class ShinonomeFont(FontRenderer):
         if self._zenkaku_index:
             line_num = self._zenkaku_index.get(char_code)
             if line_num is not None and line_num + 6 + 16 <= len(lines):
-                # Generate bitmap using index (skip linear search)
-                ret = np.zeros((16, 16, 3), np.uint8)
-                for j in range(16):
-                    if line_num + 6 + j < len(lines):
-                        line = lines[line_num + 6 + j]
-                        for bit in range(16):
-                            if bit < len(line):
-                                ret[j][bit] = [0, 0, 0] if line[bit] == "." else [255, 255, 255]
-                return ret
+                # Use Taichi for parallel bitmap generation
+                if TAICHI_AVAILABLE:
+                    # Prepare character data (16 lines)
+                    max_len = max(len(lines[line_num + 6 + j]) for j in range(16) if line_num + 6 + j < len(lines))
+                    line_chars = np.zeros((16, max_len), dtype=np.uint8)
+                    for j in range(16):
+                        if line_num + 6 + j < len(lines):
+                            line = lines[line_num + 6 + j]
+                            for k, c in enumerate(line[:max_len]):
+                                line_chars[j, k] = ord(c)
+
+                    # Generate bitmap using Taichi kernel
+                    result = np.zeros((16, 16, 3), dtype=np.uint8)
+                    _generate_bitmap_taichi(line_chars, result, 16, 16, max_len)
+                    return result
+                else:
+                    # Fallback: Original Python loops
+                    ret = np.zeros((16, 16, 3), np.uint8)
+                    for j in range(16):
+                        if line_num + 6 + j < len(lines):
+                            line = lines[line_num + 6 + j]
+                            for bit in range(16):
+                                if bit < len(line):
+                                    ret[j][bit] = [0, 0, 0] if line[bit] == "." else [255, 255, 255]
+                    return ret
 
         # Fallback: Linear search if index not available
         target_string = "STARTCHAR " + char_code
